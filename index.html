@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ELECTRIFY • Валки</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --c-bg: #060606; --c-text: #ffffff;
+            --c-yellow: #fbbf24; --c-red: #d9463b;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--c-bg); color: var(--c-text);
+            margin: 0; padding: 20px;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        .container { width: 100%; max-width: 400px; }
+        
+        .header { text-align: center; margin-bottom: 30px; }
+        .app-title { font-size: 24px; font-weight: 900; letter-spacing: 1px; margin-bottom: 5px; }
+        .date-badge { display: inline-block; background: rgba(255,255,255,0.1); padding: 5px 12px; border-radius: 12px; font-weight: bold; color: var(--c-yellow); font-size: 14px; }
+        
+        /* БЛОК ТАЙМЕРА */
+        .timer-card {
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px; padding: 25px 20px; text-align: center; margin-bottom: 30px;
+        }
+        .timer-label { font-size: 14px; color: #888; font-weight: 600; text-transform: uppercase; margin-bottom: 10px; }
+        .timer-time { font-size: 42px; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1; margin-bottom: 10px; }
+        .timer-time.off { color: var(--c-red); text-shadow: 0 0 15px rgba(217, 70, 59, 0.4); }
+        .timer-time.on { color: var(--c-yellow); text-shadow: 0 0 15px rgba(251, 191, 36, 0.4); }
+        .timer-status { font-size: 16px; font-weight: bold; }
+
+        /* СПИСОК ГРАФІКУ */
+        .interval-list { display: flex; flex-direction: column; gap: 15px; }
+        .interval-item {
+            display: flex; justify-content: space-between; align-items: center;
+            background: rgba(255,255,255,0.03); padding: 15px 20px; border-radius: 15px;
+            border-left: 4px solid #333;
+        }
+        .interval-item.off { border-left-color: var(--c-red); }
+        .interval-item.on { border-left-color: var(--c-yellow); }
+        
+        .int-time { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; }
+        .int-badge { font-size: 12px; font-weight: 800; padding: 4px 10px; border-radius: 8px; text-transform: uppercase; }
+        .int-badge.off { background: rgba(217, 70, 59, 0.2); color: var(--c-red); }
+        .int-badge.on { background: rgba(251, 191, 36, 0.2); color: var(--c-yellow); }
+
+        .loader { text-align: center; color: #888; margin-top: 50px; font-weight: bold; }
+        .footer-info { text-align: center; font-size: 12px; color: #555; margin-top: 40px; }
+    </style>
+</head>
+<body>
+
+<div class="container" id="app">
+    <div class="loader" id="loader">Завантаження графіка... ⚡</div>
+    
+    <div id="content" style="display: none;">
+        <div class="header">
+            <div class="app-title">ELECTRIFY • ВАЛКИ</div>
+            <div class="date-badge" id="dateDisplay">СЬОГОДНІ</div>
+        </div>
+
+        <div class="timer-card">
+            <div class="timer-label" id="timerLabel">Статус:</div>
+            <div class="timer-time" id="timerDisplay">--:--:--</div>
+            <div class="timer-status" id="timerStatus">Оновлюємо...</div>
+        </div>
+
+        <div class="interval-list" id="intervalList">
+            </div>
+        
+        <div class="footer-info">
+            Фактичний час відключень може змінюватися залежно від стану енергосистеми. Джерело: Харківобленерго.
+        </div>
+    </div>
+</div>
+
+<script>
+    // Ініціалізація Telegram Web App
+    const tg = window.Telegram.WebApp;
+    tg.expand(); // Відкриваємо на весь екран
+    tg.setHeaderColor('#060606');
+
+    // ТВОЇ ДАНІ З JSONBIN
+    const BIN_ID = '699b0c39d0ea881f40cf2acc'; 
+    const API_KEY = '$2a$10$eJ1fwUqfEQDl/1c.6w1GTOuCkNADdRjDwvpKTuXaRXaUeIZu0MD.W'; 
+
+    let globalIntervals = [];
+
+    async function fetchData() {
+        try {
+            const response = await fetch(`https://api.jsonbin.io/v3/b/${BIN_ID}/latest`, {
+                headers: { 'X-Master-Key': API_KEY }
+            });
+            const result = await response.json();
+            const data = result.record;
+            
+            document.getElementById('dateDisplay').textContent = data.date;
+            globalIntervals = data.intervals;
+            
+            renderList();
+            startTimer();
+            
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('content').style.display = 'block';
+        } catch (error) {
+            document.getElementById('loader').textContent = "Помилка завантаження. Спробуйте пізніше.";
+        }
+    }
+
+    function renderList() {
+        const list = document.getElementById('intervalList');
+        list.innerHTML = '';
+        
+        globalIntervals.forEach(int => {
+            // Показуємо тільки відключення, щоб не перевантажувати екран (як ми обговорювали)
+            let isActuallyOff = (int.type === 'off' && !int.isModified) || (int.type === 'on' && int.isModified);
+            if (!isActuallyOff) return;
+
+            let badgeHtml = int.isModified ? `<div class="int-badge on">СВІТЛО БУЛО</div>` : `<div class="int-badge off">ВІДКЛЮЧЕННЯ</div>`;
+            if (int.type === 'on' && int.isModified) badgeHtml = `<div class="int-badge off">АВАРІЯ</div>`;
+
+            let timeText = `${int.startStr} - ${int.displayEndStr}`;
+            
+            list.innerHTML += `
+                <div class="interval-item off">
+                    <div class="int-time">${timeText}</div>
+                    ${badgeHtml}
+                </div>
+            `;
+        });
+    }
+
+    // ЛОГІКА ТАЙМЕРА (Рахує час до наступної події)
+    function startTimer() {
+        setInterval(() => {
+            const now = new Date();
+            const currentMins = now.getHours() * 60 + now.getMinutes();
+            const currentSecs = now.getSeconds();
+            
+            let currentState = null;
+            let nextEventMins = null;
+
+            // Шукаємо поточний інтервал
+            for (let int of globalIntervals) {
+                if (currentMins >= int.startMin && currentMins < int.endMin) {
+                    currentState = (int.type === 'off' && !int.isModified) || (int.type === 'on' && int.isModified) ? 'off' : 'on';
+                    nextEventMins = int.endMin;
+                    break;
+                }
+            }
+
+            const timerDisplay = document.getElementById('timerDisplay');
+            const timerLabel = document.getElementById('timerLabel');
+            const timerStatus = document.getElementById('timerStatus');
+
+            if (nextEventMins !== null) {
+                let diffMins = nextEventMins - currentMins - 1;
+                let diffSecs = 60 - currentSecs;
+                if(diffSecs === 60) { diffSecs = 0; diffMins++; }
+
+                let h = Math.floor(diffMins / 60).toString().padStart(2, '0');
+                let m = (diffMins % 60).toString().padStart(2, '0');
+                let s = diffSecs.toString().padStart(2, '0');
+
+                timerDisplay.textContent = `${h}:${m}:${s}`;
+
+                if (currentState === 'off') {
+                    timerDisplay.className = 'timer-time off';
+                    timerLabel.textContent = 'Світло з\'явиться через:';
+                    timerStatus.textContent = '🌑 Зараз відключення';
+                } else {
+                    timerDisplay.className = 'timer-time on';
+                    timerLabel.textContent = 'Світло вимкнуть через:';
+                    timerStatus.textContent = '💡 Світло є';
+                }
+            } else {
+                timerDisplay.textContent = "00:00:00";
+                timerLabel.textContent = "Статус:";
+                timerStatus.textContent = "Графік завершено";
+            }
+        }, 1000);
+    }
+
+    fetchData();
+</script>
+</body>
+</html>
